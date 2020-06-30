@@ -16,7 +16,7 @@ namespace FewBox.Service.Demo.Controllers
         {
             return new PayloadResponseDto<string>
             {
-                Payload ="v1"
+                Payload ="v2"
             };
         }
     }
