@@ -1,40 +1,16 @@
-using AutoMapper;
-using Dapper;
-using System;
-using System.Text;
-using FewBox.Core.Persistence.Orm;
-using FewBox.Core.Utility.Net;
-using FewBox.Core.Utility.Formatter;
-using FewBox.Core.Web.Notification;
-using FewBox.Core.Web.Config;
-using FewBox.Core.Web.Error;
-using FewBox.Core.Web.Filter;
-using FewBox.Core.Web.Orm;
-using FewBox.Core.Web.Security;
-using FewBox.Core.Web.Sentry;
-using FewBox.Core.Web.Token;
+using System.Collections.Generic;
 using FewBox.Service.Demo.Domain;
-using FewBox.Service.Demo.Model.Configs;
-using FewBox.Service.Demo.Model.Repositories;
 using FewBox.Service.Demo.Model.Services;
-using FewBox.Service.Demo.Repository;
-using FewBox.Service.Demo.Stub;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.AspNetCore.Authorization;
+using FewBox.Core.Web.Extension;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.IdentityModel.Tokens;
-using Microsoft.AspNetCore.Mvc.Authorization;
-using Microsoft.Extensions.Hosting;
 using NSwag;
 using NSwag.Generation.Processors.Security;
-using Sentry.Extensibility;
-using Microsoft.AspNetCore.Mvc.Versioning;
 using NSwag.Generation.AspNetCore;
+using System.Reflection;
+using Microsoft.AspNetCore.Mvc;
 
 namespace FewBox.Service.Demo
 {
@@ -52,153 +28,18 @@ namespace FewBox.Service.Demo
         // This method gets called by the runtime. Use this method to add services to the container.
         public void ConfigureServices(IServiceCollection services)
         {
-            SqlMapper.AddTypeHandler(new SQLiteGuidTypeHandler()); // Note: SQLite
-            RestfulUtility.IsCertificateNeedValidate = false; // Whether check the ceritfication.
-            RestfulUtility.IsLogging = true; // Todo: Need to remove.
-            JsonUtility.IsCamelCase = true; // Is camel case.
-            JsonUtility.IsNullIgnore = true; // Ignore null json property.
-            HttpUtility.IsCertificateNeedValidate = false; // Whether check the ceritfication.
-            HttpUtility.IsEnsureSuccessStatusCode = false; // Whether ensure sucess status code.
-            services.AddRouting(options => options.LowercaseUrls = true); // Lowercase the urls.
-            services.AddMvc(options =>
-            {
-                if (this.Environment.IsDevelopment())
-                {
-                    options.Filters.Add(new AllowAnonymousFilter()); // Ignore the authorization.
-                }
-                options.Filters.Add<TransactionAsyncFilter>(); // Add DB transaction.
-                options.Filters.Add<TraceAsyncFilter>(); // Add biz trace log.
-            })
-            .AddJsonOptions(options =>
-            {
-                options.JsonSerializerOptions.IgnoreNullValues = true;
-            })
-            .SetCompatibilityVersion(CompatibilityVersion.Latest);
-            services.AddCors(
-                options =>
-                {
-                    options.AddDefaultPolicy(
-                        builder =>
-                        {
-                            builder.SetIsOriginAllowedToAllowWildcardSubdomains().WithOrigins("https://fewbox.com").AllowAnyMethod().AllowAnyHeader();
-                        });
-                    options.AddPolicy("all",
-                        builder =>
-                        {
-                            builder.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader();
-                        });
-                }); // Cors.
-            services.AddAutoMapper(typeof(Startup)); // Auto Mapper.
-            services.AddMemoryCache(); // Memory cache.
-            services.AddSingleton<IExceptionProcessorService, ExceptionProcessorService>(); // Catch Exception.
-            // Used for Config.
-            // Used for [Authorize(Policy="JWTRole_ControllerAction")].
-            var jwtConfig = this.Configuration.GetSection("JWTConfig").Get<JWTConfig>();
-            services.AddSingleton(jwtConfig); // JWT.
-            var securityConfig = this.Configuration.GetSection("SecurityConfig").Get<SecurityConfig>();
-            services.AddSingleton(securityConfig); // Auth Service.
-            var logConfig = this.Configuration.GetSection("LogConfig").Get<LogConfig>();
-            services.AddSingleton(logConfig); // Log Service.
-            var fewBoxConfig = this.Configuration.GetSection("FewBoxConfig").Get<FewBoxConfig>();
-            services.AddSingleton(fewBoxConfig); // FewBox Service.
-            var notificationConfig = this.Configuration.GetSection("NotificationConfig").Get<NotificationConfig>();
-            services.AddSingleton(notificationConfig); // Notification Service.
-            var healthyConfig = this.Configuration.GetSection("HealthyConfig").Get<HealthyConfig>();
-            services.AddSingleton(healthyConfig); // Healthz.
-            // Used for RBAC AOP.
-            services.AddScoped<IAuthorizationHandler, RoleHandler>();
-            services.AddSingleton<IAuthorizationPolicyProvider, RoleAuthorizationPolicyProvider>();
-            //services.AddScoped<IAuthService, RemoteAuthService>();
-            services.AddScoped<IAuthService, StubAuthService>();
-            // Used for ORM.
-            services.AddScoped<IOrmConfiguration, AppSettingOrmConfiguration>();
-            // services.AddScoped<IOrmSession, MySqlSession>(); // Note: MySql
-            services.AddScoped<IOrmSession, SQLiteSession>(); // Note: SQLite
-            services.AddScoped<ICurrentUser<Guid>, CurrentUser<Guid>>();
-            // Used for Application.
-            services.AddScoped<IAppRepository, AppRepository>();
+            services.AddFewBox(FewBoxDBType.SQLite, FewBoxAuthType.Payload, new ApiVersion(1, 0, "alpha1"));
             services.AddScoped<IFewBoxService, FewBoxService>();
-            // Used for Exception&Log AOP.
-            // services.AddScoped<INotificationHandler, ConsoleNotificationHandler>();
-            services.AddScoped<INotificationHandler, ServiceNotificationHandler>();
-            services.AddScoped<ITryCatchService, TryCatchService>();
-            // Used for IHttpContextAccessor&IActionContextAccessor context.
-            services.AddHttpContextAccessor();
-            services.AddSingleton<IActionContextAccessor, ActionContextAccessor>();
-            // Used for JWT.
-            services.AddScoped<ITokenService, JWTTokenService>();
-            services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-            .AddJwtBearer(options =>
-            {
-                options.TokenValidationParameters = new TokenValidationParameters
-                {
-                    ValidateIssuer = true,
-                    ValidateAudience = true,
-                    ValidateLifetime = true,
-                    ValidateIssuerSigningKey = true,
-                    ValidIssuer = jwtConfig.Issuer,
-                    ValidAudience = jwtConfig.Issuer,
-                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtConfig.Key))
-                };
-            });
-            // Used for ApiVersion
-            services.AddApiVersioning(options =>
-            {
-                options.ReportApiVersions = true; // Show versions in response.
-                options.AssumeDefaultVersionWhenUnspecified = true;
-                options.ApiVersionReader = new UrlSegmentApiVersionReader();
-                options.DefaultApiVersion = new ApiVersion(1, 0); // new ApiVersion(1, 0, "alpha");
-            });
-            services.AddVersionedApiExplorer(options =>
-            {
-                options.GroupNameFormat = "VVV";
-                options.SubstituteApiVersionInUrl = true;
-            });
             // Used for Swagger Open Api Document.
             services.AddOpenApiDocument(config =>
             {
-                this.InitAspNetCoreOpenApiDocumentGeneratorSettings(config, "v1", new[] { "1-alpha", "1-beta", "1" }, "v1");
+                this.InitAspNetCoreOpenApiDocumentGeneratorSettings(config, "v1", new[] { "1-alpha1", "1-beta1", "1" }, "v1");
             });
-            services.AddOpenApiDocument(config =>
-            {
-                this.InitAspNetCoreOpenApiDocumentGeneratorSettings(config, "v2", new[] { "2-alpha", "2-beta", "2" }, "v2");
-            });
-            // Used for Sentry
-            services.AddTransient<ISentryEventProcessor, SentryEventProcessor>();
-            services.AddSingleton<ISentryEventExceptionProcessor, SentryEventExceptionProcessor>();
-            //  Used for SignalR
-            services.AddSignalR();
         }
 
         public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
         {
-            app.UseHttpsRedirection();
-            app.UseRouting();
-            app.UseAuthentication();
-            app.UseAuthorization();
-            app.UseOpenApi();
-            app.UseStaticFiles();
-            app.UseCors("all");
-            if (env.IsDevelopment())
-            {
-                app.UseSwaggerUi3();
-                app.UseDeveloperExceptionPage();
-            }
-            if (env.IsStaging())
-            {
-                app.UseSwaggerUi3();
-                app.UseDeveloperExceptionPage();
-            }
-            if (env.IsProduction())
-            {
-                app.UseReDoc(c => c.DocumentPath = "/swagger/v1/swagger.json");
-                app.UseReDoc(c => c.DocumentPath = "/swagger/v2/swagger.json");
-                app.UseHsts();
-            }
-            app.UseEndpoints(endpoints =>
-            {
-                endpoints.MapControllers();
-            });
+            app.UseFewBox(new List<string> { "/swagger/v1/swagger.json" });
         }
 
         private void InitAspNetCoreOpenApiDocumentGeneratorSettings(AspNetCoreOpenApiDocumentGeneratorSettings config, string documentName, string[] apiGroupNames, string documentVersion)
@@ -225,7 +66,7 @@ namespace FewBox.Service.Demo
         {
             document.Info.Version = version;
             document.Info.Title = "FewBox Demo Api";
-            document.Info.Description = "FewBox shipping, for more information please visit the 'https://fewbox.com'";
+            document.Info.Description = "FewBox demo, for more information please visit the 'https://fewbox.com'";
             document.Info.TermsOfService = "https://fewbox.com/terms";
             document.Info.Contact = new OpenApiContact
             {
@@ -237,6 +78,10 @@ namespace FewBox.Service.Demo
             {
                 Name = "Use under license",
                 Url = "https://fewbox.com/license"
+            };
+            string service = Assembly.GetEntryAssembly().GetName().Name;
+            document.Info.ExtensionData = new Dictionary<string, object> {
+                {"Service", service}
             };
         }
     }
